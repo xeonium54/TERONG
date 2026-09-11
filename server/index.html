@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TERONG — Water & Air Quality Monitor</title>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+
+<!-- Firebase (compat SDK, simplest for plain script tags) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+
+<style>
+  :root {
+    --ink: #0d1b1e;
+    --panel: #123138;
+    --panel-2: #17414a;
+    --line: #244952;
+    --text: #dceef0;
+    --muted: #7fa3a9;
+    --tds: #4fc3d9;
+    --air: #e8a24d;
+    --good: #5bd48a;
+    --warn: #e0b84b;
+    --bad: #e0625b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", -apple-system, sans-serif;
+    background: var(--ink);
+    color: var(--text);
+  }
+
+  /* ---------- Top bar ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand-mark { font-size: 1.3em; font-weight: 700; letter-spacing: 0.02em; }
+  .brand-sub { color: var(--muted); font-size: 0.85em; }
+  nav.tabs { display: flex; gap: 4px; }
+  nav.tabs button {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 0.95em;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  nav.tabs button.active {
+    background: var(--panel-2);
+    color: var(--text);
+  }
+
+  /* ---------- Layout ---------- */
+  .view { display: none; height: calc(100vh - 58px); }
+  .view.active { display: flex; }
+
+  #map { flex: 1; }
+
+  /* ---------- Sidebar (map view) ---------- */
+  #sidebar {
+    width: 380px;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    padding: 20px;
+    overflow-y: auto;
+    display: none;
+  }
+  #sidebar.open { display: block; }
+  #sidebar .close-btn {
+    float: right;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 1.3em;
+    cursor: pointer;
+  }
+  #sidebar h2 { margin: 0 0 2px; font-size: 1.2em; }
+  #sidebar .loc-label { color: var(--muted); font-size: 0.85em; margin-bottom: 14px; }
+
+  .status-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 16px; font-size: 0.9em;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot.online { background: var(--good); }
+  .dot.offline { background: var(--bad); }
+
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .metric-box {
+    background: var(--panel-2);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .metric-box .label { font-size: 0.75em; color: var(--muted); margin-bottom: 4px; }
+  .metric-box .value { font-size: 1.4em; font-weight: 700; }
+  .metric-box.battery .value.low { color: var(--bad); }
+  .metric-box.battery .value.mid { color: var(--warn); }
+  .metric-box.battery .value.high { color: var(--good); }
+
+  .chart-block { margin-bottom: 18px; }
+  .chart-block .label { font-size: 0.8em; color: var(--muted); margin-bottom: 6px; }
+
+  /* ---------- Overview tab ---------- */
+  #overview { flex: 1; padding: 24px; overflow-y: auto; }
+  #overview h1 { margin: 0 0 4px; font-size: 1.4em; }
+  #overview .sub { color: var(--muted); margin-bottom: 20px; font-size: 0.9em; }
+
+  table.overview-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  table.overview-table th, table.overview-table td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.92em;
+  }
+  table.overview-table th {
+    color: var(--muted);
+    font-weight: 500;
+    background: var(--panel-2);
+  }
+  table.overview-table tr:last-child td { border-bottom: none; }
+  .battery-pill {
+    padding: 2px 9px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    font-weight: 600;
+  }
+  .battery-pill.high { background: rgba(91,212,138,0.15); color: var(--good); }
+  .battery-pill.mid { background: rgba(224,184,75,0.15); color: var(--warn); }
+  .battery-pill.low { background: rgba(224,98,91,0.15); color: var(--bad); }
+
+  .leaflet-popup-content-wrapper {
+    background: var(--panel); color: var(--text); border-radius: 8px;
+  }
+  .leaflet-popup-tip { background: var(--panel); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="brand-mark">TERONG</span>
+    <span class="brand-sub">Water & Air Quality Monitor</span>
+  </div>
+  <nav class="tabs">
+    <button id="tab-map" class="active">Map</button>
+    <button id="tab-overview">Overview</button>
+  </nav>
+</header>
+
+<div id="view-map" class="view active">
+  <div id="map"></div>
+  <div id="sidebar">
+    <button class="close-btn" id="sidebar-close">&times;</button>
+    <h2 id="sb-name">—</h2>
+    <div class="loc-label" id="sb-location">—</div>
+
+    <div class="status-row">
+      <span class="dot" id="sb-status-dot"></span>
+      <span id="sb-status-text">—</span>
+      <span style="color:var(--muted); margin-left:auto;" id="sb-last-seen"></span>
+    </div>
+
+    <div class="metric-grid">
+      <div class="metric-box">
+        <div class="label">TDS</div>
+        <div class="value" id="sb-tds">—</div>
+      </div>
+      <div class="metric-box">
+        <div class="label">Air Quality</div>
+        <div class="value" id="sb-air">—</div>
+      </div>
+      <div class="metric-box battery">
+        <div class="label">Battery</div>
+        <div class="value" id="sb-battery">—</div>
+      </div>
+      <div class="metric-box">
+        <div class="label">Battery Voltage</div>
+        <div class="value" id="sb-battery-v">—</div>
+      </div>
+    </div>
+
+    <div class="chart-block">
+      <div class="label">TDS — last readings</div>
+      <canvas id="chart-tds" height="120"></canvas>
+    </div>
+    <div class="chart-block">
+      <div class="label">Air quality — last readings</div>
+      <canvas id="chart-air" height="120"></canvas>
+    </div>
+  </div>
+</div>
+
+<div id="view-overview" class="view">
+  <div id="overview">
+    <h1>All Devices</h1>
+    <div class="sub">Live status across all monitoring points</div>
+    <table class="overview-table">
+      <thead>
+        <tr>
+          <th>Device</th>
+          <th>Location</th>
+          <th>Status</th>
+          <th>TDS (ppm)</th>
+          <th>Air Quality</th>
+          <th>Battery</th>
+          <th>Last Seen</th>
+        </tr>
+      </thead>
+      <tbody id="overview-body">
+        <tr><td colspan="7" style="color:var(--muted);">Loading devices...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// ========== FIREBASE CONFIG — paste your config from Firebase Console ==========
+const firebaseConfig = {
+  apiKey: "AIzaSyC3GpNixDSqQ5DU8_7jb86fcDFwb_5-lpU",
+  authDomain: "terong-1744e.firebaseapp.com",
+  projectId: "terong-1744e",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ========== PLACEHOLDER DEVICE PINS — edit lat/lng to your real locations ==========
+// device_id MUST match the DEVICE_ID set in each ESP32's firmware.
+const DEVICE_PINS = [
+  { device_id: "esp32-01", name: "Kitchen Tank",     location: "Building A — Kitchen",     lat: -6.891761, lng: 107.610639 },
+  { device_id: "esp32-02", name: "Rooftop Tank",      location: "Building A — Rooftop",     lat: -6.1998, lng: 106.8172 },
+  { device_id: "esp32-03", name: "Greenhouse Intake", location: "Greenhouse — Intake",      lat: -6.2012, lng: 106.8158 },
+  { device_id: "esp32-04", name: "Pond Station",      location: "Backyard — Fish Pond",     lat: -6.2015, lng: 106.8180 },
+  { device_id: "esp32-05", name: "Storage Tank",      location: "Warehouse — Storage",      lat: -6.1990, lng: 106.8145 },
+];
+
+// ========== State ==========
+const deviceState = {}; // device_id -> { latestReading, statusDoc, history: [] }
+let activeDeviceId = null;
+let sidebarCharts = { tds: null, air: null };
+
+// ========== Tabs ==========
+document.getElementById('tab-map').onclick = () => switchTab('map');
+document.getElementById('tab-overview').onclick = () => switchTab('overview');
+
+function switchTab(name) {
+  document.getElementById('tab-map').classList.toggle('active', name === 'map');
+  document.getElementById('tab-overview').classList.toggle('active', name === 'overview');
+  document.getElementById('view-map').classList.toggle('active', name === 'map');
+  document.getElementById('view-overview').classList.toggle('active', name === 'overview');
+  if (name === 'map') setTimeout(() => map.invalidateSize(), 50);
+}
+
+// ========== Map setup ==========
+const centerLat = DEVICE_PINS.reduce((s, d) => s + d.lat, 0) / DEVICE_PINS.length;
+const centerLng = DEVICE_PINS.reduce((s, d) => s + d.lng, 0) / DEVICE_PINS.length;
+
+const map = L.map('map').setView([centerLat, centerLng], 15);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19,
+}).addTo(map);
+
+const markers = {};
+DEVICE_PINS.forEach(pin => {
+  const marker = L.marker([pin.lat, pin.lng]).addTo(map);
+  marker.bindTooltip(pin.name, { permanent: false, direction: 'top' });
+  marker.on('click', () => openSidebar(pin.device_id));
+  markers[pin.device_id] = marker;
+  deviceState[pin.device_id] = { pin, latestReading: null, statusDoc: null, history: [] };
+});
+
+// ========== Sidebar ==========
+document.getElementById('sidebar-close').onclick = () => {
+  document.getElementById('sidebar').classList.remove('open');
+  activeDeviceId = null;
+};
+
+function batteryClass(pct) {
+  if (pct == null) return '';
+  if (pct < 30) return 'low';
+  if (pct < 60) return 'mid';
+  return 'high';
+}
+
+function timeAgo(ts) {
+  if (!ts) return 'never';
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  return `${Math.floor(secs / 3600)}h ago`;
+}
+
+function isOnline(lastSeenTs) {
+  return lastSeenTs && (Date.now() - lastSeenTs) < 60000; // seen in last 60s
+}
+
+function openSidebar(deviceId) {
+  activeDeviceId = deviceId;
+  const sidebar = document.getElementById('sidebar');
+  sidebar.classList.add('open');
+  renderSidebar(deviceId);
+  setTimeout(() => map.invalidateSize(), 50);
+}
+
+function renderSidebar(deviceId) {
+  if (activeDeviceId !== deviceId) return;
+  const state = deviceState[deviceId];
+  if (!state) return;
+
+  document.getElementById('sb-name').textContent = state.pin.name;
+  document.getElementById('sb-location').textContent = state.pin.location;
+
+  const online = isOnline(state.statusDoc?.last_seen);
+  document.getElementById('sb-status-dot').className = 'dot ' + (online ? 'online' : 'offline');
+  document.getElementById('sb-status-text').textContent = online ? 'Online' : 'Offline';
+  document.getElementById('sb-last-seen').textContent = state.statusDoc?.last_seen
+    ? 'Last seen ' + timeAgo(state.statusDoc.last_seen) : '';
+
+  const r = state.latestReading;
+  document.getElementById('sb-tds').textContent = r?.tds_ppm != null ? r.tds_ppm.toFixed(1) + ' ppm' : '—';
+  document.getElementById('sb-air').textContent = r?.air_quality_ppm != null ? r.air_quality_ppm.toFixed(1) : '—';
+
+  const pct = state.statusDoc?.battery_percent;
+  const battEl = document.getElementById('sb-battery');
+  battEl.textContent = pct != null ? pct + '%' : '—';
+  battEl.className = 'value ' + batteryClass(pct);
+
+  document.getElementById('sb-battery-v').textContent = r?.battery_voltage != null
+    ? r.battery_voltage.toFixed(2) + ' V' : '—';
+
+  renderSidebarCharts(state.history);
+}
+
+function renderSidebarCharts(history) {
+  const labels = history.map(r => new Date(r.timestamp).toLocaleTimeString());
+  const tdsData = history.map(r => r.tds_ppm);
+  const airData = history.map(r => r.air_quality_ppm);
+
+  const opts = (label, color, data) => ({
+    type: 'line',
+    data: { labels, datasets: [{ label, data, borderColor: color, tension: 0.3, pointRadius: 0 }] },
+    options: {
+      responsive: true, animation: false,
+      scales: {
+        x: { ticks: { color: '#7fa3a9', maxTicksLimit: 5 }, grid: { color: '#244952' } },
+        y: { ticks: { color: '#7fa3a9' }, grid: { color: '#244952' } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+
+  if (sidebarCharts.tds) sidebarCharts.tds.destroy();
+  if (sidebarCharts.air) sidebarCharts.air.destroy();
+  sidebarCharts.tds = new Chart(document.getElementById('chart-tds'), opts('TDS', '#4fc3d9', tdsData));
+  sidebarCharts.air = new Chart(document.getElementById('chart-air'), opts('Air Quality', '#e8a24d', airData));
+}
+
+// ========== Overview tab ==========
+function renderOverview() {
+  const tbody = document.getElementById('overview-body');
+  tbody.innerHTML = '';
+  DEVICE_PINS.forEach(pin => {
+    const state = deviceState[pin.device_id];
+    const online = isOnline(state.statusDoc?.last_seen);
+    const r = state.latestReading;
+    const pct = state.statusDoc?.battery_percent;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${pin.name}</td>
+      <td style="color:var(--muted);">${pin.location}</td>
+      <td>
+        <span class="dot ${online ? 'online' : 'offline'}" style="display:inline-block; margin-right:6px;"></span>
+        ${online ? 'Online' : 'Offline'}
+      </td>
+      <td>${r?.tds_ppm != null ? r.tds_ppm.toFixed(1) : '—'}</td>
+      <td>${r?.air_quality_ppm != null ? r.air_quality_ppm.toFixed(1) : '—'}</td>
+      <td><span class="battery-pill ${batteryClass(pct)}">${pct != null ? pct + '%' : '—'}</span></td>
+      <td style="color:var(--muted);">${timeAgo(state.statusDoc?.last_seen)}</td>
+    `;
+    tr.style.cursor = 'pointer';
+    tr.onclick = () => { switchTab('map'); openSidebar(pin.device_id); };
+    tbody.appendChild(tr);
+  });
+}
+
+// ========== Firestore live listeners ==========
+
+// Listen to "devices" collection for status/battery/last_seen (one doc per device_id)
+db.collection('devices').onSnapshot(snapshot => {
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    const deviceId = doc.id;
+    if (!deviceState[deviceId]) return; // ignore devices not in our placeholder pins
+    deviceState[deviceId].statusDoc = {
+      battery_percent: data.battery_percent,
+      last_seen: data.last_seen?.toDate ? data.last_seen.toDate().getTime() : null,
+      online: data.online,
+    };
+  });
+  renderOverview();
+  if (activeDeviceId) renderSidebar(activeDeviceId);
+});
+
+// Listen to "readings" collection for latest + recent history per device
+DEVICE_PINS.forEach(pin => {
+  db.collection('readings')
+    .where('device_id', '==', pin.device_id)
+    .orderBy('timestamp', 'desc')
+    .limit(30)
+    .onSnapshot(snapshot => {
+      const docs = snapshot.docs.map(d => {
+        const data = d.data();
+        return {
+          tds_ppm: data.tds_ppm,
+          air_quality_ppm: data.air_quality_ppm,
+          battery_voltage: data.battery_voltage,
+          timestamp: data.timestamp?.toDate ? data.timestamp.toDate().getTime() : Date.now(),
+        };
+      });
+      docs.reverse(); // chronological for charts
+      deviceState[pin.device_id].history = docs;
+      deviceState[pin.device_id].latestReading = docs[docs.length - 1] || null;
+
+      renderOverview();
+      if (activeDeviceId === pin.device_id) renderSidebar(pin.device_id);
+    }, err => {
+      console.error(`Firestore listener error for ${pin.device_id}:`, err);
+    });
+});
+
+renderOverview();
+</script>
+</body>
+</html>
